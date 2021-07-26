@@ -1,0 +1,5 @@
+app/*pycache
+*pycache*
+*venv*
+.env
+*json
