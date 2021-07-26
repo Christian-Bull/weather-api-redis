@@ -1,9 +1,7 @@
 from app import app, redis_client
 from flask import request, make_response
-# from app import redis_client
 
 import requests
-import json
 import os
 from datetime import timedelta
 
@@ -25,44 +23,30 @@ def gettemp():
         lat = r_json['lat']
         long = r_json['long']
 
-        coordinates = "({0}, {1})".format(lat, long)
+        temp, cached = returnAvgTemp(lat, long)
 
-        # check cache
-        cache_data = get_data(key=coordinates)
+        # build json response
+        data = {}
+        loc1 = {}
 
-        if cache_data is not None:
-            data = json.loads(cache_data)
-            data['cache'] = True
+        loc1['lat'] = lat
+        loc1['long'] = long
+        loc1['currentTemp'] = temp
 
-            resp = make_response(data)
+        data['loc1'] = loc1
+
+        # setup response
+        resp = make_response(data)
+
+        # checks if either response was a cached response
+        if cached:
             resp.headers['X-Cached-Temp'] = True
-            return resp
-
         else:
-            # get current temps
-            temp = returnAvgTemp(lat, long)
-
-            # build json response
-            data = {}
-            loc1 = {}
-
-            loc1['lat'] = lat
-            loc1['long'] = long
-            loc1['currentTemp'] = temp
-
-            data['loc1'] = loc1
-            data['cache'] = False
-
-            # cache data
-            data = json.dumps(data)
-            state = set_data(key=coordinates, value=data, timeout=os.environ['TIMEOUT'])
-
-            print(state)
-
-            # sets up return 
-            resp = make_response(json.loads(data))
             resp.headers['X-Cached-Temp'] = False
-            return resp
+
+        return resp
+    else:
+        return "please provide a valid lat/long"
 
 
 def getOpenWeatherAPI(lat, long):
@@ -88,7 +72,7 @@ def getWeatherGovTemp(lat, long):
 
     # locates todays temp forecast
     for i in periods:
-        if i['name'] == 'Today':
+        if i['number'] == 1:
             temp =  i['temperature']
 
     return str(temp)
@@ -96,10 +80,34 @@ def getWeatherGovTemp(lat, long):
 
 # returns avg temp
 def returnAvgTemp(lat, long):
-    gov = getWeatherGovTemp(lat, long)
-    open = getOpenWeatherAPI(lat, long)
+    cache_flag = 0
+    coordinates = "({0}, {1})".format(lat, long)
 
-    return str((float(gov) + float(open)) / 2)
+    # checks gov api for cached response
+    govKey = "gov-{0}".format(coordinates)
+    govCache = get_data(key=govKey)
+
+    if govCache is not None:
+        govData = govCache
+        cache_flag = 1
+    else:
+        govData = getWeatherGovTemp(lat, long)
+        govState = set_data(key=govKey, value=govData, timeout=os.environ['GOVTIMEOUT'])
+        print(govState)
+
+    # checks for openweather cached response
+    openKey = "open-{0}".format(coordinates)
+    openCache = get_data(key=openKey)
+
+    if openCache is not None:
+        openData = openCache
+        cache_flag = 1
+    else:
+        openData = getOpenWeatherAPI(lat, long)
+        openState = set_data(key=openKey, value=openData, timeout=os.environ['OPENTIMEOUT'])
+        print(openState)
+
+    return str((float(govData) + float(openData)) / 2), cache_flag
 
 
 # get data from redis
